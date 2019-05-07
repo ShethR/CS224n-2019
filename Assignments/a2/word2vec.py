@@ -54,30 +54,28 @@ def naiveSoftmaxLossAndGradient(
     """
 
     ### YOUR CODE HERE
-    unnormalized_scores = np.dot(outsideVectors, centerWord.reshape(-1,1))
-    normalized_scores = softmax(logits)
-    loss = -np.log(normalized_scores[outsideWordIdx])
+    unnormalized_scores = np.dot(outsideVectors, centerWordVec)
+    normalized_scores = softmax(unnormalized_scores)
+    loss = - np.log(normalized_scores[outsideWordIdx])
 
     # gradOutsideVecs, gradCenterVec
-    # shape -> (N x d), (1 x D)
-
-    gradOutsideVecs = normalized_scores
-    gradOutsideVecs[outsideWordIdx] -= 1
+    grad = normalized_scores
+    grad[outsideWordIdx] -= 1
     # shape changes from [N x 1] to [N x D] 
-    gradOutsideVecs = np.dot(gradOutsideVecs, centerWordVec.reshape(1,-1))
+    gradOutsideVecs = np.dot(grad.reshape(-1,1), centerWordVec.reshape(1,-1))
 
-    gradCenterVec = normalized_scores
-    gradCenterVecs[outsideVectors] -= 1
-    # shape changes from [Nx1] to [NxD]
-    gradCenterVecs = np.dot(gradCenterVecs, centerWordVec.reshape(1,-1))
+
+    gradCenterVecs = grad.reshape(-1,1) *  outsideVectors
+    gradCenterVecs = np.sum(gradCenterVecs, axis=0)
+
+
     ### Please use the provided softmax function (imported earlier in this file)
     ### This numerically stable implementation helps you avoid issues pertaining
     ### to integer overflow. 
 
 
     ### END YOUR CODE
-
-    return loss, gradCenterVec, gradOutsideVecs
+    return loss, gradCenterVecs, gradOutsideVecs
 
 
 def getNegativeSamples(outsideWordIdx, dataset, K):
@@ -121,11 +119,38 @@ def negSamplingLossAndGradient(
     ### YOUR CODE HERE
 
     ### Please use your implementation of sigmoid in here.
+    # Loss
+
+    sampled_vector = outsideVectors[indices]
+    output = np.dot(sampled_vector, centerWordVec.reshape(-1,1))
+    output *= -1
+    output[0] *= -1  # OutsideVector
+    activations = sigmoid(output)
+    loss = -np.sum(np.log(activations))
+
+    # Gradients 
+    gradCenterVecs = np.zeros_like(centerWordVec)
+    gradOutsideVecs = np.zeros_like(outsideVectors)
+
+    # center vector
+    center_grad = -activations * (1 - activations)
+    center_grad[0] /= -activations[0]
+    center_grad[1:] /= np.sum(activations[1:])
+    gradCenterVecs = np.dot(center_grad.T, sampled_vector).squeeze()
+    # outside Vector
+    grad = -activations
+    grad[1:] += 1
+    grad[0] *= -1 # 0 corresponds to outsideVector
+    grad[0] -= 1
+    grad = np.dot(grad.reshape(-1,1), centerWordVec.reshape(1,-1))
+
+    for i, index in enumerate(indices):
+        gradOutsideVecs[index] += grad[i]
 
 
     ### END YOUR CODE
 
-    return loss, gradCenterVec, gradOutsideVecs
+    return loss, gradCenterVecs, gradOutsideVecs
 
 
 def skipgram(currentCenterWord, windowSize, outsideWords, word2Ind,
@@ -162,8 +187,22 @@ def skipgram(currentCenterWord, windowSize, outsideWords, word2Ind,
     loss = 0.0
     gradCenterVecs = np.zeros(centerWordVectors.shape)
     gradOutsideVectors = np.zeros(outsideVectors.shape)
+    centerWordIdx = word2Ind[currentCenterWord]
+    centerWordVec = centerWordVectors[centerWordIdx]
 
-    ### YOUR CODE HERE
+    for outsideWord in outsideWords:
+        outsideWordIdx = word2Ind[outsideWord]
+
+        _loss, _gradCenterVecs, _gradOutsideVectors = word2vecLossAndGradient(
+        centerWordVec,
+        outsideWordIdx,
+        outsideVectors,
+        dataset
+        )
+
+        loss += _loss
+        gradCenterVecs[centerWordIdx] += _gradCenterVecs
+        gradOutsideVectors += _gradOutsideVectors
 
     ### END YOUR CODE
 
