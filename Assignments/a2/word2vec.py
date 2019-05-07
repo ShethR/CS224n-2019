@@ -133,10 +133,10 @@ def negSamplingLossAndGradient(
     gradOutsideVecs = np.zeros_like(outsideVectors)
 
     # center vector
-    center_grad = -activations * (1 - activations)
-    center_grad[0] /= -activations[0]
-    center_grad[1:] /= np.sum(activations[1:])
+    center_grad = 1 - activations
+    center_grad[0] *= -1
     gradCenterVecs = np.dot(center_grad.T, sampled_vector).squeeze()
+
     # outside Vector
     grad = -activations
     grad[1:] += 1
