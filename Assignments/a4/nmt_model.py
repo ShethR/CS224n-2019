@@ -77,22 +77,19 @@ class NMT(nn.Module):
             input_size=embed_size,
             hidden_size=self.hidden_size,
             bias=True,
-            dropout=self.dropout_rate,
             bidirectional=True,
         )
 
-        self.decoder = nn.LSTM(
-            input_size=embed_size,
+        self.decoder = nn.LSTMCell(
+            input_size=embed_size+self.hidden_size,
             hidden_size=self.hidden_size,
             bias=True,
-            dropout=self.dropout_rate,
-            bidirectional=False,
         )
-        self.h_projection = nn.Linear(in_features=2*self.hidden_size, out_features=self.hidden_size)
-        self.c_projection = nn.Linear(in_features=2*self.hidden_size, out_features=self.hidden_size)
-        self.att_projection = nn.Linear(in_features=2*self.hidden_size, out_features=self.hidden_size)
-        self.combined_output_projection = nn.Linear(in_features=3*self.hidden_size, out_features=self.hidden_size)
-        self.target_vocab_projection = nn.Linear(in_features=self.hidden_size, out_features=len(vocab.tgt))
+        self.h_projection = nn.Linear(in_features=2*self.hidden_size, out_features=self.hidden_size, bias=False)
+        self.c_projection = nn.Linear(in_features=2*self.hidden_size, out_features=self.hidden_size, bias=False)
+        self.att_projection = nn.Linear(in_features=2*self.hidden_size, out_features=self.hidden_size, bias=False)
+        self.combined_output_projection = nn.Linear(in_features=3*self.hidden_size, out_features=self.hidden_size, bias=False)
+        self.target_vocab_projection = nn.Linear(in_features=self.hidden_size, out_features=len(vocab.tgt), bias=False)
         self.dropout = nn.Dropout(p=self.dropout_rate)
         self.tanh = nn.Tanh()
 
@@ -236,7 +233,7 @@ class NMT(nn.Module):
         ###         where b = batch size, src_len = maximum source length, h = hidden size.
         ###         This is applying W_{attProj} to h^enc, as described in the PDF.
         ###     2. Construct tensor `Y` of target sentences with shape (tgt_len, b, e) using the target model embeddings.
-        ###         where tgt_len = maximum target sentence length, b = batch size, e = embedding size.
+        ###         where tgt_len = maximu target sentence length, b = batch size, e = embedding size.
         ###     3. Use the torch.split function to iterate over the time dimension of Y.
         ###         Within the loop, this will give you Y_t of shape (1, b, e) where b = batch size, e = embedding size.
         ###             - Squeeze Y_t into a tensor of dimension (b, e). 
@@ -265,7 +262,16 @@ class NMT(nn.Module):
         ###     Tensor Stacking:
         ###         https://pytorch.org/docs/stable/torch.html#torch.stack
 
+        enc_hiddens_proj = self.att_projection(enc_hiddens)
+        Y = self.model_embeddings.target(target_padded)
+        Y_t = Y.split(1, dim=0)
+        for y_t in Y_t:
+            y_t = y_t.squeeze(dim=0)
+            ybar_t = torch.cat([y_t, o_prev], dim=1)
+            dec_state, combined_output, _ = self.step(ybar_t, dec_state, enc_hiddens, enc_hiddens_proj, enc_masks)
+            combined_outputs.append(combined_output)
 
+        combined_outputs = torch.stack(combined_outputs, dim=0)
         ### END YOUR CODE
 
         return combined_outputs
@@ -287,7 +293,7 @@ class NMT(nn.Module):
         @param enc_hiddens_proj (Tensor): Encoder hidden states Tensor, projected from (h * 2) to h. Tensor is with shape (b, src_len, h),
                                     where b = batch size, src_len = maximum source length, h = hidden size.
         @param enc_masks (Tensor): Tensor of sentence masks shape (b, src_len),
-                                    where b = batch size, src_len is maximum source length. 
+                                    where b = batch size, src_len is maximum source length.
 
         @returns dec_state (tuple (Tensor, Tensor)): Tuple of tensors both shape (b, h), where b = batch size, h = hidden size.
                 First tensor is decoder's new hidden state, second tensor is decoder's new cell.
@@ -323,7 +329,10 @@ class NMT(nn.Module):
         ###     Tensor Squeeze:
         ###         https://pytorch.org/docs/stable/torch.html#torch.squeeze
 
-
+        dec_state = self.decoder(Ybar_t, dec_state)
+        # dec_hidden -> (1, b, h)
+        dec_hidden, dec_cell = dec_state
+        e_t = torch.bmm(enc_hiddens_proj, dec_hidden.unsqueeze(dim=-1)).squeeze(dim=-1)
         ### END YOUR CODE
 
         # Set e_t to -inf where enc_masks has 1
@@ -361,6 +370,12 @@ class NMT(nn.Module):
 
         ### END YOUR CODE
 
+        alpha_t = F.softmax(e_t, dim=1)
+        a_t =  torch.bmm(alpha_t.unsqueeze(dim=1), enc_hiddens).squeeze(dim=1)
+        U_t = torch.cat([a_t, dec_hidden], dim=1)
+        V_t = self.combined_output_projection(U_t)
+        O_t = self.dropout(self.tanh(V_t))
+
         combined_output = O_t
         return dec_state, combined_output, e_t
 
@@ -385,7 +400,7 @@ class NMT(nn.Module):
         @param src_sent (List[str]): a single source sentence (words)
         @param beam_size (int): beam size
         @param max_decoding_time_step (int): maximum number of time steps to unroll the decoding RNN
-        @returns hypotheses (List[Hypothesis]): a list of hypothesis, each hypothesis has two fields:
+        returns hypotheses (List[Hypothesis]): a list of hypothesis, each hypothesis has two fields:
                 value: List[str]: the decoded target sentence, represented as a list of words
                 score: float: the log-likelihood of the target sentence
         """
